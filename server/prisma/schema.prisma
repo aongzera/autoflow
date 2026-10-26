@@ -1,0 +1,274 @@
+// ============================================================
+// AutoFlow — Prisma schema
+// เครื่องมือ workflow ก่อน EMCS + push เข้า EMCS สำหรับอู่ซ่อมรถ
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ──────────────────────────────────────────────
+// Reference entities — "ของที่ใช้ซ้ำข้ามหลายเคลม"
+// แยกออกมาเพราะถูกอ้างถึงซ้ำ ไม่ใช่เพราะ field เยอะ
+// ──────────────────────────────────────────────
+
+model Customer {
+  id              Int  @id @default(autoincrement()) // surrogate PK — ไม่เอาเลขบัตร/ใบขับขี่เป็น key (mutable + PDPA)
+  thaiId          String? @unique // เลขบัตรประชาชน — ไม่เปลี่ยนตลอดชีวิต = dedupe key (nullable เผื่อต่างชาติ)
+  driverLicenseNo String? // เลขใบขับขี่ — เปลี่ยนได้ตอนต่อบัตร เก็บเป็น data เฉยๆ ห้ามเป็น key
+  name            String
+  phone           String
+  lineUserId      String? // เผื่อผูกบัญชี LINE ลูกค้าในอนาคต
+  claims          Claim[]
+}
+
+model Vehicle {
+  VIN          String  @id
+  licensePlate String // ทะเบียน = กุญแจหลักตอน LINE router จับคู่รูปเข้าคัน
+  province     String // ทะเบียนซ้ำกันข้ามจังหวัดได้ ต้องมีจังหวัดคู่กันเสมอ
+  brand        String?
+  model        String?
+  claims       Claim[]
+
+  // TODO: เปิดก่อน LINE router ขึ้น production — lookup นี้ยิงทุกรูปที่เข้ามา
+  //@@index([licensePlate])
+}
+
+model Insurer {
+  id     Int     @id @default(autoincrement())
+  name   String  @unique // copy-paste เป๊ะจาก dropdown EMCS (ห้ามพิมพ์เอง กันเพี้ยน) — unique กันสร้างซ้ำ
+  code   String? // <option value> ที่ซ่อนหลัง dropdown ถ้าเจอตอน spike ไม่งั้น null
+  claims Claim[]
+}
+
+// ──────────────────────────────────────────────
+// Claim — ศูนย์กลางที่ทุกอย่างมาเกาะ (เป็น "ฝั่ง N" ของทุกความสัมพันธ์)
+// ──────────────────────────────────────────────
+
+model Claim {
+  id Int @id @default(autoincrement())
+
+  // relations — ข้อมูลจริงอยู่ตารางอื่น claim ถือแค่ FK แล้ว join เอา
+  customerId Int
+  customer   Customer @relation(fields: [customerId], references: [id])
+  vehicleId  String
+  vehicle    Vehicle  @relation(fields: [vehicleId], references: [VIN])
+  insurerId  Int
+  insurer    Insurer  @relation(fields: [insurerId], references: [id])
+
+  dropOff      Boolean    @default(false) // 90% TWO_VISIT, 10% DROP_OFF — คุม flow
+  stage        ClaimStage @default(CONTACTED) // เคลมเดินถึงไหนใน lifecycle — ขับ board ของพ่อ
+  claimDocNo   String // เลขใบเคลมที่ประกันออกให้ ไว้อ้างอิงคุยกับประกัน
+  eClaimNo     String?    @default(dbgenerated("NULL"))// id ของเคลมใน EMCS — null จนกว่า CREATE_CLAIM สำเร็จ (precondition ของ push)
+  contactDate  DateTime   @default(now())
+  dropOffDate  DateTime? // วันนัดจอดซ่อม (เคส TWO_VISIT)
+
+  photos          Photo[]
+  emcsJobs        EmcsJob[]
+  routingSessions RoutingSession[]
+  equipment       VehicleEquipment?
+
+  updatedAt DateTime @updatedAt
+
+  @@unique([insurerId, claimDocNo]) // ใบเคลมใบเดียวกัน ห้ามคีย์ซ้ำสองรอบ
+
+  // TODO: เปิดตอนข้อมูลเริ่มเยอะ — Postgres ไม่สร้าง index ให้ FK อัตโนมัติ
+  //@@index([stage])
+  //@@index([customerId])
+  //@@index([vehicleId])
+  //@@index([insurerId])
+}
+
+// ──────────────────────────────────────────────
+// Photo — รูป + ทำหน้าที่เป็น LINE inbox ในตัวเดียวกัน
+// invariant: matchStatus == MATCHED  <=>  claimId != null
+// เขียนสองฟิลด์นี้ผ่าน photoRouting.ts ที่เดียวเท่านั้น
+// ──────────────────────────────────────────────
+
+model Photo {
+  id Int @id @default(autoincrement())
+
+  claimId Int? // nullable! null = รูปจาก LINE ที่ยังจับคู่ไม่ได้ (อยู่ใน inbox)
+  claim   Claim? @relation(fields: [claimId], references: [id], onDelete: SetNull) // ลบเคลมทิ้ง → รูปหล่นกลับ inbox ไม่หาย
+
+  stage        PhotoStage // รูปนี้ของช่วงไหน — "ป้ายติดถาวร" ใช้ group การ์ดใน UI
+  emcsDocType  EmcsDocType? // ประเภทสำหรับ dropdown ตอน push EMCS (ละเอียดกว่า stage)
+  storageUrl   String // ไฟล์จริงบน storage เรา ไม่ใช่ลิงก์ LINE ที่หมดอายุ
+  lineSenderId String? // คนส่ง — ใช้จับ burst กลุ่มช่าง (null ถ้า WEB_UPLOAD)
+
+  // --- LINE provenance ---
+  source        PhotoSource @default(LINE)
+  lineMessageId String?     @unique // message.id จาก webhook — กันดูดซ้ำถ้า LINE ยิงซ้ำ
+  lineGroupId   String? // ห้อง/กลุ่มที่รูปมา ใช้ตอน matching แบบกลุ่มต่อคัน
+  lineCaption   String? // ข้อความแนบ เผื่อพิมพ์ทะเบียนมาช่วย matching
+
+  // --- 2 สถานะ คนละ pipeline กัน ---
+  matchStatus    MatchStatus      @default(UNMATCHED) // จับคู่เข้าเคลมหรือยัง (เรื่อง router)
+  emcsStatus     EmcsUploadStatus @default(PENDING) // ส่งขึ้น EMCS หรือยัง (เรื่อง puppeteer push)
+  emcsUploadedAt DateTime?
+  emcsError      String?
+
+  createdAt DateTime @default(now())
+}
+
+// ──────────────────────────────────────────────
+// EmcsJob — "ใบสั่งงาน Puppeteer + สมุดบันทึกสถานะ"
+// ไม่เก็บ data ธุรกิจ ถือแค่ claimId แล้ว join เอาตอนรัน
+// idempotency: งาน = "ทุกรูปที่ยัง PENDING" ไม่ใช่ "รูป 12 ใบนี้"
+// ──────────────────────────────────────────────
+
+model EmcsJob {
+  id String @id @default(cuid())
+
+  claimId Int
+  claim   Claim @relation(fields: [claimId], references: [id], onDelete: Cascade) // ลบเคลมผิด → job log ตายตามได้
+
+  jobType EmcsJobType // MVP ใช้แค่ PUSH_PHOTOS ที่เหลือเฟสหลัง
+  status  EmcsJobStatus @default(QUEUED)
+
+  photoStage     PhotoStage? // เฉพาะงานรูป: ดัน batch ไหน (null สำหรับ job ที่ไม่เกี่ยวกับรูป)
+  photosTotal    Int?
+  photosUploaded Int?
+
+  attempts  Int     @default(0) // กัน retry ไม่รู้จบ
+  error     String? // error ล่าสุด ไว้ debug
+  resultRef String? // ผลลัพธ์ที่ job สร้าง เช่น claim ref จาก CREATE_CLAIM (audit)
+
+  startedAt  DateTime?
+  finishedAt DateTime?
+  createdAt  DateTime  @default(now())
+}
+
+// ──────────────────────────────────────────────
+// VehicleEquipment — ใบรับรถ/สภาพรถตอน intake (field กลุ่มที่เกิดพร้อมกัน)
+// แยกจาก Claim เพราะใช้แค่ stage เดียว ไม่ให้ Claim บวม
+// ──────────────────────────────────────────────
+
+model VehicleEquipment {
+  id        Int   @id @default(autoincrement())
+  claimId   Int   @unique // unique = หนึ่งเคลมมีใบรับรถได้ใบเดียว (คู่กับ Claim.equipment แบบ 1:1)
+  claim     Claim @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  mileageKm Int // เลข กม.
+  fuelLevel FuelLevel // radio E..F → เลือกค่าเดียว
+  spareTire Boolean @default(false)
+  hubCap    Boolean @default(false)
+  jack      Boolean @default(false) // แม่แรง
+  floorMats Boolean @default(false)
+}
+
+model RoutingSession {
+  id           String   @id @default(cuid())
+  lineGroupId  String
+  lineSenderId String
+  claimId      Int
+  claim        Claim    @relation(fields: [claimId], references: [id], onDelete: Cascade) // เคลมหาย session ไร้ความหมาย
+  expiresAt    DateTime // sliding window: refresh ทุกครั้งที่ match รูปสำเร็จ
+
+  @@unique([lineGroupId, lineSenderId]) // หนึ่ง sender ต่อกลุ่ม มี session เดียว → plate ใหม่ = upsert ทับ
+}
+
+// ──────────────────────────────────────────────
+// Enums
+// ──────────────────────────────────────────────
+
+enum ClaimStage {
+  CONTACTED // ติดต่อครั้งแรก
+  PRICED // เสนอราคา
+  DROPPED_OFF // จอดซ่อมจริง
+  IN_REPAIR // กำลังซ่อม
+  DONE // เสร็จ/ส่งมอบ
+  CANCELLED // ลูกค้าหาย/ประกันไม่อนุมัติ — ปิดเคสแบบเก็บประวัติ (hard delete ใช้เฉพาะคีย์ผิด)
+}
+
+enum PhotoStage {
+  CONTACT // ติดต่อครั้งแรก
+  INTAKE // รับรถ
+  PROGRESS // ระหว่างซ่อม
+  DONE // ซ่อมเสร็จ
+}
+
+enum PhotoSource {
+  LINE
+  WEB_UPLOAD
+}
+
+enum MatchStatus {
+  UNMATCHED
+  MATCHED
+  IGNORED // dismiss จาก inbox — รูปยังอยู่ใน DB กู้คืนได้
+}
+
+enum EmcsUploadStatus {
+  PENDING
+  UPLOADED
+  FAILED
+}
+
+enum EmcsDocType {
+  SUPPORTING_DOC // เอกสารประกอบ
+  CLAIM_FORM // ใบเคลม
+  DRIVER_LICENSE // ใบขับขี่
+  PRE_REPAIR_CONDITION // สภาพรถก่อนซ่อม
+  PROGRESS // ระหว่างซ่อม
+  COMPLETED // ซ่อมเสร็จ
+}
+
+enum EmcsJobType {
+  CREATE_RECEIPT // สร้างใบรับรถ
+  CREATE_CLAIM // สร้างเคลม + อัพรูป/เอกสาร
+  PUSH_PHOTOS // ดันรูป batch ขึ้นเคลมเดิม  ← MVP ทำแค่ตัวนี้
+  UPDATE_STAGE // อัพเดทสถานะ เช่น จอดซ่อมแล้ว
+}
+
+enum EmcsJobStatus {
+  QUEUED
+  RUNNING
+  DONE
+  PARTIAL // บางรูปสำเร็จ บางรูปพัง
+  FAILED
+}
+
+enum FuelLevel {
+  E
+  QUARTER
+  HALF
+  THREE_QUARTER
+  F
+}
+
+// ──────────────────────────────────────────────
+// เฟสหลัง — ยังไม่ต้อง migrate ตอนนี้
+// เปิดใช้ตอนทำ feature 4 (เอกสาร) และ 6 (price history)
+// NOTE: claimId/insurerId อัพเดทเป็น Int แล้วให้ตรงกับ PK ปัจจุบัน
+// ──────────────────────────────────────────────
+// model Document {
+//   id           String       @id @default(cuid())
+//   claimId      Int
+//   claim        Claim        @relation(fields: [claimId], references: [id])
+//   type         DocumentType // RECEIPT / APPOINTMENT / JOB_SHEET
+//   pdfUrl       String
+//   signedAt     DateTime?
+//   signatureUrl String?
+//   createdAt    DateTime     @default(now())
+// }
+//
+// model PartPrice {
+//   id            String      @id @default(cuid())
+//   claimId       Int
+//   claim         Claim       @relation(fields: [claimId], references: [id])
+//   insurerId     Int
+//   insurer       Insurer     @relation(fields: [insurerId], references: [id])
+//   vehicleModel  String      // snapshot ชื่อรุ่น ณ ตอนนั้น
+//   partName      String
+//   approvedPrice Decimal     @db.Decimal(10, 2)
+//   approvedAt    DateTime?
+//   source        PriceSource // MANUAL / SCRAPED
+//   createdAt     DateTime    @default(now())
+// }
+//
+// enum DocumentType { RECEIPT APPOINTMENT JOB_SHEET }
+// enum PriceSource  { MANUAL SCRAPED }
