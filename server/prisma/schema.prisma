@@ -105,7 +105,7 @@ model Photo {
   lineMessageId String?     @unique // message.id จาก webhook — กันดูดซ้ำถ้า LINE ยิงซ้ำ
   lineGroupId   String? // ห้อง/กลุ่มที่รูปมา ใช้ตอน matching แบบกลุ่มต่อคัน
   lineCaption   String? // ข้อความแนบ เผื่อพิมพ์ทะเบียนมาช่วย matching
-
+  lineWebhookEventId String? @unique
   // --- 2 สถานะ คนละ pipeline กัน ---
   matchStatus    MatchStatus      @default(UNMATCHED) // จับคู่เข้าเคลมหรือยัง (เรื่อง router)
   emcsStatus     EmcsUploadStatus @default(PENDING) // ส่งขึ้น EMCS หรือยัง (เรื่อง puppeteer push)
