@@ -167,7 +167,6 @@ model RoutingSession {
   claimId      Int
   claim        Claim    @relation(fields: [claimId], references: [id], onDelete: Cascade) // เคลมหาย session ไร้ความหมาย
   expiresAt    DateTime // sliding window: refresh ทุกครั้งที่ match รูปสำเร็จ
-
   @@unique([lineGroupId, lineSenderId]) // หนึ่ง sender ต่อกลุ่ม มี session เดียว → plate ใหม่ = upsert ทับ
 }
 

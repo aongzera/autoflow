@@ -1,6 +1,6 @@
 import { Router} from "express"
 import { prisma } from "../lib/prisma"
-
+import { normalizePlate } from "../lib/plate"
 const router = Router()
 type vehicle = {
     VIN : string, 
@@ -14,7 +14,7 @@ router.post("/vehicle",(req,res)=>{
     const vehicle = prisma.vehicle.create({
         data : {
             VIN : VIN,
-            licensePlate : licensePlate,
+            licensePlate : normalizePlate(licensePlate),
             province : province,
             brand : brand,
             model : model
