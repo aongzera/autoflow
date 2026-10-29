@@ -5,6 +5,7 @@ import claimRoute  from './routes/claim'
 import customerRoute from './routes/customer'
 import insurerRoute from './routes/insurer'
 import lineWebhookRoute from './routes/webhook'
+import photoRoute from './routes/photo'
 const app = express()
 
 app.use(express())
@@ -21,7 +22,7 @@ app.use('/api/v1',vehicleRoute)
 app.use('/api/v1',claimRoute)
 app.use('/api/v1',customerRoute)
 app.use('/api/v1',insurerRoute)
-
+app.use('/api/v1',photoRoute)
 app.listen(3000,()=> {
     console.log("currently listion on port 3000")
 })

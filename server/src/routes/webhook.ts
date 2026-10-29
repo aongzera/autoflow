@@ -7,6 +7,7 @@ import { parsePlate } from "../lib/plate"
 import { upsertSession,getActiveSession,extendSession } from "../service/routingSession.service"
 import { findClaimByPlate } from "../service/claim.service"
 import { createPhoto,matchPhoto } from "../service/photo.service"
+import { replyText } from "../lib/line"
 const router = Router()
 
 async function handleImage(event: webhook.MessageEvent, message: webhook.ImageMessageContent) {
@@ -70,9 +71,17 @@ async function handleText(event: webhook.MessageEvent, message: webhook.TextMess
   if(!lineGroupId||!lineSenderId) return
   const listClaimId = await findClaimByPlate(parsed.plate)
 
-  if((listClaimId).length !== 1) return
+  if((listClaimId).length == 0) {
+      const res = await replyText(event.replyToken,"ไม่มีเคลมของทะเบียน " +  parsed.plate)
+    return
+  }
+  if((listClaimId).length > 1) {
+      const res = await replyText(event.replyToken,"มีเคลมของทะเบียน "+parsed.plate+" ที่เปิดอยู่มากกว่า 1 เคลม กรุณาเลือกเคลมในระบบด้วยตนเอง")
+    return
+  }
   const claimId = listClaimId[0].id
   await upsertSession(lineGroupId,lineSenderId,claimId)
+  await replyText(event.replyToken,"เจอเคลอมของทะเบียน "+ parsed.plate)
 }
 
 // 1) runs only when the signature is GOOD

@@ -32,3 +32,17 @@ export async function matchPhoto(input : Match){
         }
     })
 }
+export async function getUnmatchedPhoto(){
+    const photo = await prisma.photo.findMany({
+        where : {
+            matchStatus : "UNMATCHED"
+        },orderBy: [
+      { lineGroupId: "asc" },
+      { lineSenderId: "asc" },                           // ② second sort key
+      { createdAt: "asc" },                           // ③ third sort key
+    ],
+    select: { id: true, createdAt: true, lineGroupId: true, lineSenderId: true }
+    })
+
+    return photo
+}
